@@ -185,14 +185,17 @@ void resourceManager(int* matrix, int columns, int* processorMasterPortion, int*
                         portionMatrixWithExtraData[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
                     }
                 }
+                
+                //Send Data 
+                MPI_Send(portionMatrixWithExtraData, (count + columns), MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
+                //Send Vector
+                MPI_Send(vector, vectorSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
             }
             
             
             //Update row Index
             rowMatrixIndex += minPortionRows + 1; 
           
-            //Send Data 
-            MPI_Send(portionMatrixWithExtraData, (count + columns), MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
             
             
             //One less
@@ -216,17 +219,19 @@ void resourceManager(int* matrix, int columns, int* processorMasterPortion, int*
                         portionMatrix[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
                     }
                 }
+                //Send Data 
+                MPI_Send(portionMatrix, count, MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
+                //Send Vector
+                MPI_Send(vector, vectorSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
             }
             
             //Update row Index
             rowMatrixIndex += minPortionRows; 
         
-            //Send Data 
-            MPI_Send(portionMatrix, count, MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
+            
         }
 
-        //Send Vector
-        MPI_Send(vector, vectorSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
+        
     } 
 }
 
