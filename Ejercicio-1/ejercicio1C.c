@@ -3,7 +3,7 @@ Alumno:  Merenda, Franco N.
 Carrera: Ing. en Computación
 
 Sistemas Distribuidos y Paralelos
-    TP N°6 - Ejercicio 1.c
+    TP N°6 - Ejercicio 1.c 
 */
 
 #include<stdio.h>
