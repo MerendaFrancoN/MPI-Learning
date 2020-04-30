@@ -8,6 +8,7 @@ Sistemas Distribuidos y Paralelos
 
 #include<stdio.h>
 #include<stdlib.h>
+#include<string.h>
 #include<mpi.h>
 
 //Set process Master
@@ -30,7 +31,8 @@ void fillVector(int* vector, int dimension);
 
 int main(int argc, char **argv){
     int node = 0, communicatorSize, matrixSize;
-    int *vectorToMultiply, data, **matrixPortion, *finalResult ;
+
+    int *vectorFromMatrix, *vectorToMultiply;
     int dataProcessed[1];
     //Init MPI_Library
     MPI_Init(&argc, &argv);
@@ -50,56 +52,69 @@ int main(int argc, char **argv){
         
         //Allocate memory
         int **matrix = allocate2DMatrix(matrixSize, matrixSize);
-        int *vector = allocateVector(matrixSize);
-         
+        vectorToMultiply = allocateVector(matrixSize);
+        vectorFromMatrix = allocateVector(matrixSize);
+
         //Fill vectors and matrix
         fillMatrix(matrix, matrixSize, matrixSize);
-        fillVector(vector,matrixSize);
-
+        fillVector(vectorToMultiply,matrixSize);
         
-
+        
         //Assign vector and data to every worker process
-        for(int processorNumber = 0; processorNumber < matrixSize ; processorNumber++){
+        memcpy(vectorFromMatrix, matrix[0], matrixSize*sizeof(int)); //Processor 0
+
+        for(int processorNumber = 1; processorNumber < matrixSize ; processorNumber++){
 
             //Send Data
-            MPI_Send(vector, matrixSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
+            MPI_Send(vectorToMultiply, matrixSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
             MPI_Send(matrix[processorNumber], matrixSize, MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
-        }   
+        }
+   
 
+    }else{
+        
+        /*WORKER and MASTER PROCESSOR*/
+        if(node < matrixSize){ //Condition in case that were it would be more processes than rows.
+            //Vectors
+            vectorToMultiply = allocateVector(matrixSize);
+            vectorFromMatrix = allocateVector(matrixSize);
+
+            //Receive vector
+            MPI_Recv(vectorToMultiply, matrixSize, MPI_INT, MASTER, TAGVECTOR, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            //Receive row to process
+            MPI_Recv(vectorFromMatrix, matrixSize, MPI_INT, MASTER, TAGMATRIX, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+
+            //Process
+            dataProcessed[0] = 0;
+                
+            for(int rowIndex = 0; rowIndex < matrixSize; rowIndex++){
+                dataProcessed[0] += vectorFromMatrix[rowIndex] * vectorToMultiply[rowIndex];
+            }
+            //Send back result to master
+            MPI_Send(&dataProcessed, 1, MPI_INT, MASTER, TAGRESPONSE, MPI_COMM_WORLD);
+
+            //Free memory
+            free(vectorFromMatrix);
+            free(vectorToMultiply);
+        }
     }
 
-    /*WORKER and MASTER PROCESSOR*/
-    if(node < matrixSize){ //Condition in case that were it would be more processes than rows.
-        //Vectors
-        vectorToMultiply = allocateVector(matrixSize);
-        int *vectorFromMatrix = allocateVector(matrixSize);
-
-        //Receive vector
-        MPI_Recv(vectorToMultiply, matrixSize, MPI_INT, MASTER, TAGVECTOR, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        //Receive row to process
-        MPI_Recv(vectorFromMatrix, matrixSize, MPI_INT, MASTER, TAGMATRIX, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-
-        //Process
-        dataProcessed[0] = 0;
-        
-        for(int i = 0; i < matrixSize; i++){
-            
-            dataProcessed[0] += vectorFromMatrix[i] * vectorToMultiply[i];
-        }
-        //Send back result to master
-        MPI_Send(&dataProcessed, 1, MPI_INT, MASTER, TAGRESPONSE, MPI_COMM_WORLD);
-            }
-
-       
-    
     /*MASTER PROCESSOR*/
     if(node == MASTER){
-        int *finalResult = allocateVector(matrixSize);
         
-        //Gather all processed data
-        for(int i = 0; i < matrixSize; i++){
+        //Allocate Results
+        int *finalResult = allocateVector(matrixSize);
+
+        //Process MASTER
+        finalResult[0] = 0;
+        for(int rowIndex = 0; rowIndex < matrixSize; rowIndex++){
+            finalResult[0] += vectorFromMatrix[rowIndex] * vectorToMultiply[rowIndex];
+        }
+
+        //Gather all rest of the processed data
+        for(int i = 1; i < matrixSize; i++){
             //Gather all the results
             MPI_Recv(&dataProcessed, 1, MPI_INT, i, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             //Assign data where it belongs
@@ -108,6 +123,11 @@ int main(int argc, char **argv){
         
         //Print final output
         printVector(finalResult,matrixSize);
+
+        //Free
+        free(finalResult);
+        free(vectorFromMatrix);
+        free(vectorToMultiply);
     }
 
     //Finalize MPI

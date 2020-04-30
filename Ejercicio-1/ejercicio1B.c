@@ -26,22 +26,21 @@ int main(int argc, char **argv){
         //Send data to itself
         sprintf(data,"(Hola desde el proceso %d)\n", node);
         
-        // MPI_Send(buffer,count,type,dest,tag,comm)  -- tag has to match in receiver and sender, however,
-        // One could set any tag (positive integer to identify a message), and in receiver set MPI_ANY_TAG to be able 
-        // to receive any kind.
-        MPI_Send(data, BUFFER, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
-        
         //Print the requested
-        printf("Hola, soy el proceso 0 ( hay %d procesos ) y recibo: ", size);
-        for(int i = 0; i < size; i++){            
+        printf("Hola, soy el proceso 0 ( hay %d procesos ) y recibo: %s", size, data);
+        for(int i = 1; i < size; i++){            
             MPI_Recv(data, BUFFER, MPI_CHAR, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             printf("%s",data);
         }
     }else{
         sprintf(data,"(Hola desde el proceso %d)\n", node);
+        
+        // MPI_Send(buffer,count,type,dest,tag,comm)  -- tag has to match in receiver and sender, however,
+        // One could set any tag (positive integer to identify a message), and in receiver set MPI_ANY_TAG to be able 
+        // to receive any kind.
         MPI_Send(data, BUFFER, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
     }
-
     //Finalize MPI
-    MPI_Finalize();
+        MPI_Finalize();
 }
+
