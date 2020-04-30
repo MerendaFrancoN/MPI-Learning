@@ -8,6 +8,7 @@ Sistemas Distribuidos y Paralelos
 
 #include<stdio.h>
 #include<stdlib.h>
+#include<string.h>
 #include<mpi.h>
 
 //Set process Master
@@ -19,8 +20,8 @@ Sistemas Distribuidos y Paralelos
 #define TAGRESPONSE 2
 
 //Resource Manager
-void resourceManager(int* matrix, int columns, int* vector, int vectorSize, int processors, int portionRows, int deallocatedRowsSize);
-int* resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize);
+void resourceManager(int* matrix, int columns, int* processorMasterPortion, int* vector, int vectorSize, int processors, int minPortionRows, int deallocatedRowsSize);
+int* resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize, int *processorMasterPortion);
 
 //Allocations
 int* allocate1D2DMatrix(int rows, int columns);
@@ -67,9 +68,11 @@ int main(int argc, char **argv){
     
     //Number of items to receive
     count = portionRows * matrixSize;
-
     
-    
+    //Allocate Vectors
+    vectorToMultiply = allocate1D2DMatrix(1, matrixSize); //Will hold data to process
+    dataProcessed = allocate1D2DMatrix(portionRows, 1); // mxn nxz ==> m x z // will hold data processed
+    matrixPortion = allocate1D2DMatrix(portionRows, matrixSize); //Will hold data to process
     
     /*MASTER PROCESSOR*/
     if(node == MASTER){
@@ -77,71 +80,78 @@ int main(int argc, char **argv){
         
         //Allocate memory
         int *matrix = allocate1D2DMatrix(matrixSize, matrixSize);
-        int *vector = allocate1D2DMatrix(matrixSize, matrixSize);
+        vectorToMultiply = allocate1D2DMatrix(matrixSize, matrixSize);
          
         //Fill vectors and matrix
         fillMatrix(matrix, matrixSize, matrixSize);
-        fillMatrix(vector, 1 ,matrixSize);
+        fillMatrix(vectorToMultiply, 1 ,matrixSize);
         
         //Assign resources to process
-        resourceManager(matrix, matrixSize, vector, matrixSize, size, minPortionRows, matrixSize % size );
+        resourceManager(matrix, matrixSize, matrixPortion, vectorToMultiply, matrixSize, size, minPortionRows, matrixSize % size );
 
         //Free matrix
         free(matrix);
-        free(vector);
-    }
+    }else{
+         //-------------------------------------//
     
-    
-    //-------------------------------------//
-    
-    /*WORKER PROCESSOR*/
-    
-    //Allocate Vectors
-    vectorToMultiply = allocate1D2DMatrix(1, matrixSize);
-    matrixPortion = allocate1D2DMatrix(portionRows, matrixSize);
-    dataProcessed = allocate1D2DMatrix(portionRows, 1); // mxn nxz ==> m x z
+        /*WORKER PROCESSOR*/
 
-    //Receive row to process
-    MPI_Recv(matrixPortion, count, MPI_INT, MASTER, TAGMATRIX, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    //Receive vector
-    MPI_Recv(vectorToMultiply, matrixSize, MPI_INT, MASTER, TAGVECTOR, MPI_COMM_WORLD, MPI_STATUS_IGNORE);   
+        //Receive row to process
+        MPI_Recv(matrixPortion, count, MPI_INT, MASTER, TAGMATRIX, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        //Receive vector
+        MPI_Recv(vectorToMultiply, matrixSize, MPI_INT, MASTER, TAGVECTOR, MPI_COMM_WORLD, MPI_STATUS_IGNORE);   
 
-    //Process Data
-    for(int i = 0; i < portionRows; i++){
-        dataProcessed[i] = 0;
-        for(int j = 0; j < matrixSize; j++){
-            dataProcessed[i] += vectorToMultiply[j] * matrixPortion[i*matrixSize + j];
+        //Process Data
+        for(int i = 0; i < portionRows; i++){
+            dataProcessed[i] = 0;
+            for(int j = 0; j < matrixSize; j++){
+                dataProcessed[i] += vectorToMultiply[j] * matrixPortion[i*matrixSize + j];
+            }
+            
         }
+        //Send back result to master
+        MPI_Send(dataProcessed, portionRows, MPI_INT, MASTER, TAGRESPONSE, MPI_COMM_WORLD);
         
+        //Free memory
+        free(vectorToMultiply);
+        free(matrixPortion);
+        free(dataProcessed);
+
+        /*FINAL PART OF WORKER*/
+
     }
-
-    //Send back result to master
-    MPI_Send(dataProcessed, portionRows, MPI_INT, MASTER, TAGRESPONSE, MPI_COMM_WORLD);
     
-    //Free memory
-    free(vectorToMultiply);
-    free(matrixPortion);
-    free(dataProcessed);
-
-    /*FINAL PART OF WORKER*/
 
     //-------------------------------------//
 
     /*MASTER PROCESSOR -- GATHER ALL THE DATA*/
     if(node == MASTER){
-        int *finalResult = resultsManager(matrixSize, matrixSize, matrixSize / size, size, matrixSize % size );
+
+        //Process data P0
+        //Process Data
+        for(int i = 0; i < portionRows; i++){
+            dataProcessed[i] = 0;
+            for(int j = 0; j < matrixSize; j++){
+                dataProcessed[i] += vectorToMultiply[j] * matrixPortion[i*matrixSize + j];
+            }
+        }
+
+
+        int *finalResult = resultsManager(matrixSize, matrixSize, matrixSize / size, size, matrixSize % size, dataProcessed);
         
         //Print Results
         printMatrix(finalResult, matrixSize, 1);
         
         //Free finalResult
         free(finalResult);
+        free(matrixPortion);
+        free(vectorToMultiply);
     }
 
     MPI_Finalize();
 }
 
-void resourceManager(int* matrix, int columns, int* vector,
+void resourceManager(int* matrix, int columns, int* processorMasterPortion, int* vector,
  int vectorSize, int processors, int minPortionRows, int deallocatedRowsSize){
     
     //Index of rows of matrix
@@ -161,11 +171,22 @@ void resourceManager(int* matrix, int columns, int* vector,
         if(deallocatedRowsSize > 0){ //Case of slices to add in some processors
             
             //Get portion from matrix
-            for(int rowIndex = 0; rowIndex < minPortionRows + 1; rowIndex++){
-                for(int columnIndex = 0; columnIndex < columns; columnIndex++){
-                    portionMatrixWithExtraData[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
+            if(processorNumber == 0){
+                //memcpy(processorMasterPortion,&matrix[rowMatrixIndex*columns], count + columns);
+                for(int rowIndex = 0; rowIndex < minPortionRows + 1; rowIndex++){
+                    for(int columnIndex = 0; columnIndex < columns; columnIndex++){
+                        processorMasterPortion[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
+                    }
+                }
+            }else{
+                //memcpy(portionMatrixWithExtraData,&matrix[rowMatrixIndex*columns], count + columns);
+                for(int rowIndex = 0; rowIndex < minPortionRows + 1; rowIndex++){
+                    for(int columnIndex = 0; columnIndex < columns; columnIndex++){
+                        portionMatrixWithExtraData[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
+                    }
                 }
             }
+            
             
             //Update row Index
             rowMatrixIndex += minPortionRows + 1; 
@@ -181,9 +202,19 @@ void resourceManager(int* matrix, int columns, int* vector,
         else{ //Case normal
             
             //Get portion from matrix
-            for(int rowIndex = 0; rowIndex < minPortionRows; rowIndex++){
-                for(int columnIndex = 0; columnIndex < columns; columnIndex++){
-                    portionMatrix [rowIndex*columns + columnIndex] = matrix[(rowIndex + rowMatrixIndex) * columns + columnIndex];
+            if(processorNumber == 0){
+                //memcpy(processorMasterPortion,&matrix[rowMatrixIndex*columns], count);
+                for(int rowIndex = 0; rowIndex < minPortionRows; rowIndex++){
+                    for(int columnIndex = 0; columnIndex < columns; columnIndex++){
+                        processorMasterPortion[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
+                    }
+                }
+            }else{
+                //memcpy(portionMatrix,&matrix[rowMatrixIndex*columns], count);
+                for(int rowIndex = 0; rowIndex < minPortionRows; rowIndex++){
+                    for(int columnIndex = 0; columnIndex < columns; columnIndex++){
+                        portionMatrix[ rowIndex*columns + columnIndex] = matrix[(rowMatrixIndex + rowIndex)*columns + columnIndex];
+                    }
                 }
             }
             
@@ -199,7 +230,7 @@ void resourceManager(int* matrix, int columns, int* vector,
     } 
 }
 
-int* resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize){
+int* resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize, int *processorMasterPortion){
     //Index of rows of matrix
     int rowMatrixIndex = 0; 
      
@@ -215,15 +246,23 @@ int* resultsManager(int totalRows, int columns, int minPortionRows, int processo
         //Prepare data
         if(deallocatedRowsSize > 0){ //Case of slices to add in some processors
             
-            //Receive the data
-            MPI_Recv(portionMatrixWithExtraData, minPortionRows + 1, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            
-            for(int rowIndex = 0; rowIndex < minPortionRows + 1 ; rowIndex++){
+            if(processorNumber == 0){
+                for(int rowIndex = 0; rowIndex < minPortionRows + 1 ; rowIndex++){
 
-                //Get the data to results
-                results[rowIndex + rowMatrixIndex] = portionMatrixWithExtraData[rowIndex];
+                    //Get the data to results
+                    results[rowIndex + rowMatrixIndex] = processorMasterPortion[rowIndex];
+                }
+            }else{
+                //Receive the data
+                MPI_Recv(portionMatrixWithExtraData, minPortionRows + 1, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                for(int rowIndex = 0; rowIndex < minPortionRows + 1 ; rowIndex++){
+
+                    //Get the data to results
+                    results[rowIndex + rowMatrixIndex] = portionMatrixWithExtraData[rowIndex];
+                }
             }
-
+            
             //Update row Index
             rowMatrixIndex += minPortionRows + 1; 
             
@@ -232,14 +271,22 @@ int* resultsManager(int totalRows, int columns, int minPortionRows, int processo
         } 
         else{ //Case normal
             
-            //Receive the data
-            MPI_Recv(portionMatrix, minPortionRows, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if(processorNumber == 0){
+                for(int rowIndex = 0; rowIndex < minPortionRows ; rowIndex++){
 
-            for(int rowIndex = 0; rowIndex < minPortionRows ; rowIndex++){
-                
-                //Get the data to results
-                results[rowIndex + rowMatrixIndex] = portionMatrix[rowIndex];
-            }
+                    //Get the data to results
+                    results[rowIndex + rowMatrixIndex] = processorMasterPortion[rowIndex];
+                }
+            }else{
+               //Receive the data
+                MPI_Recv(portionMatrix, minPortionRows, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                for(int rowIndex = 0; rowIndex < minPortionRows ; rowIndex++){
+                    
+                    //Get the data to results
+                    results[rowIndex + rowMatrixIndex] = portionMatrix[rowIndex];
+                }
+            }   
 
             //Update row Index
          rowMatrixIndex += minPortionRows; 
