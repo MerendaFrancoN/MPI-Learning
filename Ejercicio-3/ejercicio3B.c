@@ -1,314 +1,161 @@
-/*
-Alumno:  Merenda, Franco N.
-Carrera: Ing. en Computación
-
-Sistemas Distribuidos y Paralelos
-    TP N°6 - Ejercicio 2 -- Funciona siempre y cuando tamaño matriz <= cantidad de procesadores disponibles.
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <mpi.h>
 
-//Set process Master
-#define MASTER 0
-
-//Tags
-#define TAGVECTOR 0
-#define TAGMATRIX 1
-#define TAGRESPONSE 2
-
-//Resource Manager
-void resourceManager(int *matrix, int columns, int *processorMasterPortion, int *vector, int vectorSize, int processors, int minPortionRows, int deallocatedRowsSize);
-int *resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize, int *processorMasterPortion);
-
-//Allocations
-int *allocate1D2DMatrix(int rows, int columns);
+#define ROOTPROCESSOR 0
 
 //Utils
+int *allocate1D2DMatrix(int rows, int columns);
+
+//Program Utils
+int getCurrentRows(int rowsNumber, int rank, int size);
+void calcSendCountAndDisplacements(int* sendCounts, int*displacements,int size, int rowsNumber, int multiplier);
+
+//Matrix Operations
 void printMatrix(int *matrixToPrint, int rows, int columns);
 void fillMatrix(int *matrixToFill, int rows, int columns);
-void copyMatrixs(int rowsToCopy, int columnsToCopy, int *source, int *dest, int sourceMatrixRowIndex, int destMatrixRowIndex);
 void multiplyMatrixVector(int *matrixA, int *matrixB, int *dataProcessed, int rows, int columns);
 
-int main(int argc, char **argv)
-{
-    int node = 0, size, matrixSize;
-    int *dataProcessed, *vectorToMultiply, *matrixPortion;
 
-    //Variables about number of rows vs processors
-    int isExtraPortion = 0; //Variable to know if its a bigger portion or normal sized.
-    int portionRows = 0;    //To know how big will be what we will send.
-    int minPortionRows = 0;
-    int count = 0; //Count of items received
+
+int main(int argc, char** argv){
+    
+    /*
+        rank = processor rank in Communicator
+        size = Size of Communicator
+        rowsNumber = rowsNumber of Matrix  == ColumnNumber
+        countToReceive = Counts of data that will receive this processor
+        currentRows = Rows that will handle this processor
+
+        dataProcessed = Buffer for multiplication of matrixPortion with VectorMultiply
+        vectorToMultiply - self-explained
+        matrixPortion = MatrixPortion that the processor receives.
+    */
+    int rank, size, rowsNumber, countToReceive = 0, currentRows;
+    int *dataProcessed, *vectorToMultiply, *matrixPortion;
 
     //Init MPI_Library
     MPI_Init(&argc, &argv);
 
     //Get number of laps from args
-    matrixSize = atoi(argv[1]);
+    rowsNumber = atoi(argv[1]);
 
-    //Get rank from node in their commnicator
-    MPI_Comm_rank(MPI_COMM_WORLD, &node);
+    //Get rank from rank in their commnicator
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     //Get Number of processes
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    /* INFO ABOUT MATRIX PORTIONS*/
+    //Set the data for this processor
+    currentRows  = getCurrentRows(rowsNumber, rank, size);
+    countToReceive = currentRows * rowsNumber;
 
-    //Get Info about number of rows vs processors (Resource manager will need this)
-    minPortionRows = matrixSize / size; //To know how big will be what we will send.
+    /*Allocate Memory*/
+    vectorToMultiply = allocate1D2DMatrix(rowsNumber, 1);
+    dataProcessed = allocate1D2DMatrix(currentRows, 1);
+    matrixPortion = allocate1D2DMatrix(currentRows, rowsNumber); 
+   
+    if (rank == ROOTPROCESSOR){
+        //1° Allocate Matrix and results
+        int *matrix = allocate1D2DMatrix(rowsNumber, rowsNumber);
+        int *results = allocate1D2DMatrix(rowsNumber, 1);
 
-    // Info about if its a bigger or normal size portion of a matrix.
-    // Cause the program knows that the master will send in order, and the biggers will be in the first deallocatedRowsSize processors,
-    // So we can deduce beforehand if it will be bigger or not.
-    isExtraPortion = (((matrixSize % size) - (node)) <= 0); //(matrixSize % size) == number of rows unallocated
+        /*2°Vectors with information for Scatterv and gatherv
+            sendCounts - as long as "size", in each position, the count that will send to each processor
+            displacements - as log as "size", in each position, the displacement from where to take de data
+        */
+        int *sendCounts = allocate1D2DMatrix(1, size);
+        int *displacements = allocate1D2DMatrix(1, size); 
 
-    //Update actual PortionRows
-    portionRows = isExtraPortion ? minPortionRows : minPortionRows + 1;
+        //3° Fill Matrix and Vector
+        fillMatrix(matrix, rowsNumber, rowsNumber); 
+        fillMatrix(vectorToMultiply, rowsNumber, 1);
 
-    //Number of items to receive
-    count = portionRows * matrixSize;
+         
+        
+        //1° Share data with all the process in communicator: Calculate de Sendcount and displacement for share 
+        //                                                    the data among the processors from the "matrix"
+        
+        calcSendCountAndDisplacements(sendCounts, displacements, size, rowsNumber ,rowsNumber);
+        MPI_Scatterv(matrix, sendCounts, displacements, MPI_INT, matrixPortion, countToReceive, MPI_INT, ROOTPROCESSOR, MPI_COMM_WORLD);
+        free(matrix); //Free matrix as soon as posible
 
-    //Allocate Vectors
-    vectorToMultiply = allocate1D2DMatrix(1, matrixSize);        //Will hold data to process
-    dataProcessed = allocate1D2DMatrix(portionRows, 1);          // mxn nxz ==> m x z // will hold data processed
-    matrixPortion = allocate1D2DMatrix(portionRows, matrixSize); //Will hold data to process
+        //2° Shares the content of vector with other processors
+        MPI_Bcast(vectorToMultiply, rowsNumber, MPI_INT, 0, MPI_COMM_WORLD);
 
-    /*MASTER PROCESSOR*/
-    if (node == MASTER)
-    {
-        /*Generate Matrix and vector*/
+        //3° Multiply
+        multiplyMatrixVector(matrixPortion, vectorToMultiply, dataProcessed, currentRows, rowsNumber);
+        
+        /*4° Gather data from all the processors in the communicator:
+                Calculate de Sendcount and displacement for share the data among the processors from the "matrix"
+        */
+        calcSendCountAndDisplacements(sendCounts, displacements, size, rowsNumber, 1);
+        MPI_Gatherv(dataProcessed, currentRows, MPI_INT, results, sendCounts, displacements, MPI_INT, ROOTPROCESSOR, MPI_COMM_WORLD);
 
-        //Allocate memory
-        int *matrix = allocate1D2DMatrix(matrixSize, matrixSize);
-        vectorToMultiply = allocate1D2DMatrix(matrixSize, matrixSize);
+        //5° -- FINAL STEP : Print RESULTS
+        printMatrix(results, rowsNumber, 1);
 
-        //Fill vectors and matrix
-        fillMatrix(matrix, matrixSize, matrixSize);
-        fillMatrix(vectorToMultiply, 1, matrixSize);
 
-        //Assign resources to process
-        resourceManager(matrix, matrixSize, matrixPortion, vectorToMultiply, matrixSize, size, minPortionRows, matrixSize % size);
-
-        //Free matrix
-        free(matrix);
+        //6° Free memory after deliver data to all the processors
+        free(sendCounts);
+        free(displacements);
+        free(results);
     }
-    else
-    {
-        //-------------------------------------//
-
-        /*WORKER PROCESSOR*/
-
-        //Receive row to process
-        MPI_Recv(matrixPortion, count, MPI_INT, MASTER, TAGMATRIX, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        //Receive vector
-        MPI_Recv(vectorToMultiply, matrixSize, MPI_INT, MASTER, TAGVECTOR, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        //Process Data - results in dataProcessed
-        multiplyMatrixVector(matrixPortion, vectorToMultiply, dataProcessed, portionRows, matrixSize);
-
-        //Send back result to master
-        MPI_Send(dataProcessed, portionRows, MPI_INT, MASTER, TAGRESPONSE, MPI_COMM_WORLD);
-
-        //Free memory
-        free(vectorToMultiply);
-        free(matrixPortion);
-        free(dataProcessed);
-
-        /*FINAL PART OF WORKER*/
+    else{
+        //1° Receive in matrixPortion
+        MPI_Scatterv(NULL, NULL, NULL, MPI_INT, matrixPortion, countToReceive, MPI_INT, ROOTPROCESSOR, MPI_COMM_WORLD);
+        
+        //2°Receive in vectorToMultiply
+        MPI_Bcast(vectorToMultiply, rowsNumber, MPI_INT, 0, MPI_COMM_WORLD);
+       
+        //3° Multiply
+        multiplyMatrixVector(matrixPortion, vectorToMultiply, dataProcessed, currentRows,rowsNumber);
+        
+        //4°Send data processed to Master
+        MPI_Gatherv(dataProcessed, currentRows, MPI_INT, NULL, NULL, NULL, MPI_INT, ROOTPROCESSOR, MPI_COMM_WORLD);
     }
+    
+    //4° Release Memory
+    free(matrixPortion);
+    free(vectorToMultiply);
+    free(dataProcessed);
 
-    //-------------------------------------//
-
-    /*MASTER PROCESSOR -- GATHER ALL THE DATA*/
-    if (node == MASTER)
-    {
-
-        //Process Data in MASTER
-        multiplyMatrixVector(matrixPortion, vectorToMultiply, dataProcessed, portionRows, matrixSize);
-
-        int *finalResult = resultsManager(matrixSize, matrixSize, matrixSize / size, size, matrixSize % size, dataProcessed);
-
-        //Print Results
-        printMatrix(finalResult, matrixSize, 1);
-
-        //Free finalResult
-        free(finalResult);
-        free(matrixPortion);
-        free(vectorToMultiply);
-    }
-
+    //Finalize Process
+    MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
 }
 
-/*
-Take as inputs the matrix, columns, the portion of the processor 0, that will be de administrator
-and worker at the same time.
-*/
-void resourceManager(int *matrix, int columns, int *processorMasterPortion, int *vector,
-                     int vectorSize, int processors, int minPortionRows, int deallocatedRowsSize){
+//Function to calculate the number of rows that will handle the "rank" processor
+int getCurrentRows(int rowsNumber, int rank, int size){
 
-    //Index of rows of matrix
-    int rowMatrixIndex = 0;
+    /*
+        isExtraPortion = Info about if its a bigger or normal size portion of a matrix.
+        minPortionRows = minSize for matrix portion, when rows are not divisible with number of processors
+    */
+    int isExtraPortion = 0, minPortionRows = 0;
 
-    //Auxiliary matrix
-    int *portionMatrix = allocate1D2DMatrix(minPortionRows, columns);                  //Auxiliary Matrix
-    int *portionMatrixWithExtraData = allocate1D2DMatrix(minPortionRows + 1, columns); //Auxiliary Matrix
+    //Get Info about number of rows vs processors 
+    minPortionRows = rowsNumber / size; //To know how big will be what we will send.
 
-    //MPI Info
-    int count = minPortionRows * columns; //Counts of data to send to process
+    // Cause the program knows that the master will send in order, and the biggers will be in the first deallocatedRowsSize processors,
+    // So we can deduce beforehand if it will be bigger or not.
+    isExtraPortion = (((rowsNumber % size) - (rank)) <= 0); //(rowLength % size) == number of rows unallocated
 
-    //Assign vector and data to every worker process
-    for (int processorNumber = 0; processorNumber < processors; processorNumber++)
-    {
-
-        //Prepare data
-        if (deallocatedRowsSize > 0)
-        { //Case of slices to add in some processors
-
-            //Get portion from matrix
-            if (processorNumber == 0)
-            {
-
-                //Return portionMatrix to be processed by the MASTER
-                copyMatrixs(minPortionRows + 1, columns, matrix, processorMasterPortion, rowMatrixIndex, 0);
-            }
-            else
-            {
-
-                copyMatrixs(minPortionRows + 1, columns, matrix, portionMatrixWithExtraData, rowMatrixIndex, 0); //Send Data
-
-                MPI_Send(portionMatrixWithExtraData, (count + columns), MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
-                //Send Vector
-                MPI_Send(vector, vectorSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
-            }
-
-            //Update row Index
-            rowMatrixIndex += minPortionRows + 1;
-
-            //One less
-            deallocatedRowsSize--;
-        }
-        else
-        { //Case normal
-
-            //Get portion from matrix
-            if (processorNumber == 0)
-            {
-
-                copyMatrixs(minPortionRows, columns, matrix, processorMasterPortion, rowMatrixIndex, 0);
-            }
-            else
-            {
-
-                copyMatrixs(minPortionRows, columns, matrix, portionMatrix, rowMatrixIndex, 0);
-                //Send Data
-                MPI_Send(portionMatrix, count, MPI_INT, processorNumber, TAGMATRIX, MPI_COMM_WORLD);
-                //Send Vector
-                MPI_Send(vector, vectorSize, MPI_INT, processorNumber, TAGVECTOR, MPI_COMM_WORLD);
-            }
-
-            //Update matrix Row Index
-            rowMatrixIndex += minPortionRows;
-        }
-    }
-
-    //Free memory
-    free(portionMatrix);
-    free(portionMatrixWithExtraData);
+    //Update actual PortionRows
+    return isExtraPortion ? minPortionRows  : (minPortionRows + 1);
 }
 
-void copyMatrixs(int rowsToCopy, int columnsToCopy, int *source, int *dest, int sourceMatrixRowIndex, int destMatrixRowIndex){
-
-    for (int rowIndex = 0; rowIndex < rowsToCopy; rowIndex++)
-    {
-        for (int columnIndex = 0; columnIndex < columnsToCopy; columnIndex++)
-        {
-            dest[(destMatrixRowIndex + rowIndex) * columnsToCopy + columnIndex] = source[(sourceMatrixRowIndex + rowIndex) * columnsToCopy + columnIndex];
-        }
+//Function to calculate the sendCount and Displacement array for MPI_Gatherv and MPI_Scatterv function
+void calcSendCountAndDisplacements(int* sendCounts, int*displacements,int size, int rowsNumber, int multiplier){
+    int sum = 0; //Auxiliary to set the displacement for each processor
+    
+    for(int processorRank = 0; processorRank < size; processorRank++){
+        sendCounts[ processorRank ] = getCurrentRows(rowsNumber, processorRank, size) * multiplier; 
+        displacements[processorRank] = sum;
+        //Index of total array
+        sum += sendCounts[processorRank];
     }
-}
-
-void multiplyMatrixVector(int *matrixA, int *vector, int *dataProcessed, int rows, int columns){
-
-    for (int rowIndex = 0; rowIndex < rows; rowIndex++)
-    {
-        dataProcessed[rowIndex] = 0;
-        for (int colIndex = 0; colIndex < columns; colIndex++)
-        {
-            dataProcessed[rowIndex] += matrixA[rowIndex * columns + colIndex] * vector[colIndex];
-        }
-    }
-}
-
-int *resultsManager(int totalRows, int columns, int minPortionRows, int processors, int deallocatedRowsSize, int *processorMasterPortion){
-    //Index of rows of matrix
-    int rowMatrixIndex = 0;
-
-    //Auxiliary matrix
-    int *portionMatrix = allocate1D2DMatrix(minPortionRows, columns);                  //Auxiliary Matrix
-    int *portionMatrixWithExtraData = allocate1D2DMatrix(minPortionRows + 1, columns); //Auxiliary Matrix
-
-    int *results = allocate1D2DMatrix(totalRows, 1);
-
-    //Assign vector and data to every worker process
-    for (int processorNumber = 0; processorNumber < processors; processorNumber++)
-    {
-
-        //Prepare data
-        if (deallocatedRowsSize > 0)
-        { //Case of slices to add in some processors
-
-            if (processorNumber == 0)
-            {
-                //If processor == 0 will find data in message received, otherwise just give the data to P0
-                copyMatrixs(minPortionRows + 1, 1, processorMasterPortion, results, 0, rowMatrixIndex);
-            }
-            else
-            {
-                //Receive the data
-                MPI_Recv(portionMatrixWithExtraData, minPortionRows + 1, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-                //Save parcial Results
-                copyMatrixs(minPortionRows + 1, 1, portionMatrixWithExtraData, results, 0, rowMatrixIndex);
-            }
-
-            //Update row Index
-            rowMatrixIndex += minPortionRows + 1;
-
-            //One less
-            deallocatedRowsSize--;
-        }
-        else
-        { //Case normal
-
-            if (processorNumber == 0)
-            {
-
-                //If processor == 0 will find data in message received, otherwise just give the data to P0
-                copyMatrixs(minPortionRows, 1, processorMasterPortion, results, 0, rowMatrixIndex);
-            }
-            else
-            {
-                //Receive the data
-                MPI_Recv(portionMatrix, minPortionRows, MPI_INT, processorNumber, TAGRESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-                //Save parcial Results
-                copyMatrixs(minPortionRows, 1, portionMatrix, results, 0, rowMatrixIndex);
-            }
-
-            //Update row Index
-            rowMatrixIndex += minPortionRows;
-        }
-    }
-    //Free memory
-    free(portionMatrixWithExtraData);
-    free(portionMatrix);
-
-    //Return results
-    return results;
 }
 
 int *allocate1D2DMatrix(int rows, int columns){
@@ -339,4 +186,16 @@ void printMatrix(int *matrixToPrint, int rows, int columns){
         printf("\n");
     }
     printf("]");
+}
+
+void multiplyMatrixVector(int *matrixA, int *vector, int *dataProcessed, int rows, int columns){
+
+    for (int rowIndex = 0; rowIndex < rows; rowIndex++)
+    {
+        dataProcessed[rowIndex] = 0;
+        for (int colIndex = 0; colIndex < columns; colIndex++)
+        {
+            dataProcessed[rowIndex] += matrixA[rowIndex * columns + colIndex] * vector[colIndex];
+        }
+    }
 }
