@@ -1,9 +1,10 @@
-**Ante el problema planteado se puede encontrar una forma
+El Juego de la Vida es paralelizable ya que, teniendo en cuenta que las unidades de tiempo son discretas, y que estamos trabajando sobre una matriz
+donde a una celda en particular, para saber su próximo estado necesita conocer de su contexto, la idea es procesar éstas celdas con su entorno de manera 
+paralela para conocer el próximo estado de las mismas. 
 
-Basicamente como se mueve en unidades de tiempo discretas, se puede procesar cada fila o columna con sus vecinos en ese momento y 
-calcular como queda la nueva fila o culumna. Otra alternativa sería a través de un entorno como células. 
+Se puede hacer de distintas maneras, procesando cada fila o columna con sus vecinos y obtener las nuevas filas o columnas o sino bien, otra alternativa
+es a través células.
 
-A través de distintos procesos que se encarguen cada uno, de una o varias celulas o filas o columnas, podría paralelizarse.
 Una vez que rearmamos la matriz luego de una pasada a toda la matriz, es como si hubiera pasado una hora, y así sucesivamente para
 poder desarrollar el juego de la vida.
 
@@ -11,5 +12,7 @@ Una vez que se rearma la matriz, obtenemos el nuevo estado del juego, repetimos 
 del juego.
 
 
+En el caso secuencial, lo que se hace es calcular una celda, fila o columna, una tras otra, en el caso paralelo, se aprovecha el poder computar varias de ellas
+al mismo tiempo.
 
 
