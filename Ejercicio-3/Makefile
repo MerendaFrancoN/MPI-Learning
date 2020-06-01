@@ -8,7 +8,6 @@ size = 0
 	mpicc -g -std=c99 -Wall -o ./build/ejercicio3A ejercicio3A.c
 
 	mpicc -g -std=c99 -Wall -o ./build/ejercicio3B ejercicio3B.c
-
   clean: 
 	$(RM) ./build/ejercicio*
   

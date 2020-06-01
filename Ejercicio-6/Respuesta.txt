@@ -1,0 +1,15 @@
+**Ante el problema planteado se puede encontrar una forma
+
+Basicamente como se mueve en unidades de tiempo discretas, se puede procesar cada fila o columna con sus vecinos en ese momento y 
+calcular como queda la nueva fila o culumna. Otra alternativa sería a través de un entorno como células. 
+
+A través de distintos procesos que se encarguen cada uno, de una o varias celulas o filas o columnas, podría paralelizarse.
+Una vez que rearmamos la matriz luego de una pasada a toda la matriz, es como si hubiera pasado una hora, y así sucesivamente para
+poder desarrollar el juego de la vida.
+
+Una vez que se rearma la matriz, obtenemos el nuevo estado del juego, repetimos el procesamiento y por cada matriz completa generada, es el nuevo estado
+del juego.
+
+
+
+

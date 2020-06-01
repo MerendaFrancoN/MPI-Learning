@@ -9,10 +9,6 @@ size = 0
 
 	mpicc -g -std=c99 -Wall -o ./build/worker worker.c
   clean: 
-	$(RM) ./build/ejercicio*
-  
-  3A:
-	mpirun -np $(np) ./build/ejercicio3A $(size)
-  3B:
-	mpirun -np $(np) ./build/ejercicio3B $(size)
+	$(RM) ./build/manager ./build/worker
+
 
