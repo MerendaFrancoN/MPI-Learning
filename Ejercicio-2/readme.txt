@@ -5,6 +5,7 @@ Correr:
 
 Otra forma:
 
-	- make EJ2
+	- make EJ2 np=4 laps=2
+
 
 
